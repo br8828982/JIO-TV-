@@ -24,6 +24,7 @@
       display: flex;
       flex-direction: column;
       align-items: center;
+      min-height: 100vh;
     }
 
     header {
@@ -32,6 +33,7 @@
       background-color: var(--primary);
       color: white;
       width: 100%;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.2);
     }
 
     main {
@@ -39,6 +41,10 @@
       width: 100%;
       padding: 1rem;
       box-sizing: border-box;
+      flex-grow: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
     }
 
     video {
@@ -46,23 +52,28 @@
       max-height: 480px;
       background: black;
       border-radius: var(--border-radius);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
     }
 
     .controls {
       margin-top: 1rem;
+      width: 100%;
+      max-width: 700px;
       display: flex;
-      flex-direction: column;
+      flex-wrap: wrap;
       gap: 0.5rem;
+      justify-content: center;
       align-items: center;
     }
 
-    input[type="text"] {
-      width: 100%;
-      max-width: 700px;
+    input[type="text"], select {
+      flex: 1 1 250px;
+      min-width: 150px;
       padding: 0.6rem;
       font-size: 1rem;
       border-radius: var(--border-radius);
       border: 1px solid #ccc;
+      box-sizing: border-box;
     }
 
     button {
@@ -74,6 +85,7 @@
       border-radius: var(--border-radius);
       cursor: pointer;
       transition: background-color 0.3s;
+      flex-shrink: 0;
     }
 
     button:hover {
@@ -85,6 +97,8 @@
       color: var(--error);
       font-weight: bold;
       text-align: center;
+      min-height: 1.2em;
+      user-select: none;
     }
 
     #channelList {
@@ -92,6 +106,7 @@
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
       gap: 1rem;
+      width: 100%;
     }
 
     .channelBtn {
@@ -105,6 +120,7 @@
       text-align: center;
       cursor: pointer;
       transition: box-shadow 0.3s;
+      user-select: none;
     }
 
     .channelBtn:hover {
@@ -119,7 +135,7 @@
     }
 
     @media (max-width: 600px) {
-      input[type="text"] {
+      input[type="text"], select {
         font-size: 0.9rem;
       }
 
@@ -138,6 +154,10 @@
     <video id="video" controls autoplay></video>
 
     <div class="controls">
+      <input id="searchInput" type="text" placeholder="Search channels..." />
+      <select id="groupSelect">
+        <option value="all">All Categories</option>
+      </select>
       <input id="m3uurl" type="text" placeholder="Enter M3U playlist URL"
              value="https://raw.githubusercontent.com/alex4528/m3u/refs/heads/main/jstar.m3u" />
       <button id="loadPlaylistBtn">Load Playlist</button>
@@ -149,6 +169,9 @@
   </main>
 
   <script>
+    let allChannels = [];
+    let player = null;
+
     function parseM3UChannels(m3uText) {
       const lines = m3uText.split(/\r?\n/).map(l => l.trim());
       const channels = [];
@@ -161,6 +184,7 @@
             name: '',
             logo: '',
             manifestUri: '',
+            group: '',
             clearKeyId: null,
             clearKeyKey: null,
             userAgent: null,
@@ -168,11 +192,13 @@
           };
 
           const nameMatch = line.match(/,(.+)$/);
-          channel.name = nameMatch ? nameMatch[1].trim() : 'Unnamed Channel';
+          if (nameMatch) channel.name = nameMatch[1].trim();
 
           const logoMatch = line.match(/tvg-logo="([^"]+)"/);
           if (logoMatch) channel.logo = logoMatch[1];
 
+          const groupMatch = line.match(/group-title="([^"]+)"/);
+          if (groupMatch) channel.group = groupMatch[1].trim();
         } else if (line.startsWith('#KODIPROP:inputstream.adaptive.license_key=')) {
           const parts = line.split('=')[1].split(':');
           if (parts.length === 2) {
@@ -197,7 +223,68 @@
       return channels;
     }
 
-    let player = null;
+    function updateGroupOptions(channels) {
+      const select = document.getElementById('groupSelect');
+      const groups = new Set(channels.map(c => c.group).filter(g => g && g.trim() !== ''));
+
+      console.log('Detected groups:', Array.from(groups)); // Debug log groups
+
+      // Clear options except the first ("All Categories")
+      select.innerHTML = '<option value="all">All Categories</option>';
+
+      groups.forEach(g => {
+        const option = document.createElement('option');
+        option.value = g;
+        option.textContent = g;
+        select.appendChild(option);
+      });
+    }
+
+    function renderChannelList(channels) {
+      const list = document.getElementById('channelList');
+      list.innerHTML = '';
+
+      if (!channels.length) {
+        list.textContent = 'No channels found.';
+        return;
+      }
+
+      for (const ch of channels) {
+        const btn = document.createElement('div');
+        btn.className = 'channelBtn';
+        btn.title = ch.name;
+
+        if (ch.logo) {
+          const img = document.createElement('img');
+          img.className = 'channelLogo';
+          img.src = ch.logo;
+          img.alt = ch.name;
+          btn.appendChild(img);
+        }
+
+        const text = document.createElement('div');
+        text.textContent = ch.name;
+        btn.appendChild(text);
+
+        btn.addEventListener('click', () => playChannel(ch));
+
+        list.appendChild(btn);
+      }
+    }
+
+    function filterChannels() {
+      const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+      const group = document.getElementById('groupSelect').value.toLowerCase().trim();
+
+      const filtered = allChannels.filter(ch => {
+        const chGroup = ch.group ? ch.group.toLowerCase().trim() : '';
+        const matchGroup = (group === 'all') || (chGroup === group);
+        const matchSearch = ch.name.toLowerCase().includes(searchTerm);
+        return matchGroup && matchSearch;
+      });
+
+      renderChannelList(filtered);
+    }
 
     async function playChannel(channel) {
       const status = document.getElementById('status');
@@ -249,74 +336,62 @@
       player.configure({
         drm: {
           clearKeys: {
-            [channel.clearKeyId]: channel.clearKeyKey,
+            [channel.clearKeyId]: channel.clearKeyKey
           },
+          advanced: {
+            'com.widevine.alpha': {
+              videoRobustness: 'SW_SECURE_DECODE'
+            }
+          }
         },
+        streaming: {
+          retryParameters: {
+            maxAttempts: 3,
+            baseDelay: 1000,
+            backoffFactor: 2,
+            fuzzFactor: 0.5,
+            timeout: 30000
+          }
+        }
       });
 
       try {
         await player.load(channel.manifestUri);
-        status.textContent = `Playing: ${channel.name}`;
+        status.textContent = 'Playing: ' + channel.name;
       } catch (e) {
-        console.error('Load failed', e);
-        status.textContent = 'Failed to load channel manifest: ' + e.message;
+        console.error('Error loading channel', e);
+        status.textContent = 'Failed to load channel: ' + e.message;
       }
     }
 
-    async function loadPlaylist(url) {
+    async function loadPlaylist() {
       const status = document.getElementById('status');
-      const list = document.getElementById('channelList');
-      list.innerHTML = '';
+      const url = document.getElementById('m3uurl').value.trim();
+      if (!url) {
+        status.textContent = 'Please enter a valid M3U playlist URL.';
+        return;
+      }
       status.textContent = 'Loading playlist...';
 
-      let text;
       try {
         const res = await fetch(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status} fetching playlist`);
-        text = await res.text();
+        if (!res.ok) throw new Error('Network response was not OK');
+        const text = await res.text();
+        allChannels = parseM3UChannels(text);
+        updateGroupOptions(allChannels);
+        filterChannels();
+        status.textContent = `Loaded ${allChannels.length} channels.`;
       } catch (e) {
         status.textContent = 'Failed to load playlist: ' + e.message;
-        return;
-      }
-
-      const channels = parseM3UChannels(text);
-
-      if (!channels.length) {
-        status.textContent = 'No channels found in playlist.';
-        return;
-      }
-
-      status.textContent = `Found ${channels.length} channel(s). Select one to play.`;
-
-      for (const ch of channels) {
-        const btn = document.createElement('div');
-        btn.className = 'channelBtn';
-        btn.title = ch.name;
-
-        if (ch.logo) {
-          const img = document.createElement('img');
-          img.className = 'channelLogo';
-          img.src = ch.logo;
-          img.alt = ch.name;
-          btn.appendChild(img);
-        }
-
-        const text = document.createElement('div');
-        text.textContent = ch.name;
-        btn.appendChild(text);
-
-        btn.addEventListener('click', () => playChannel(ch));
-
-        list.appendChild(btn);
       }
     }
 
-    document.getElementById('loadPlaylistBtn').addEventListener('click', () => {
-      const url = document.getElementById('m3uurl').value.trim();
-      if (url) {
-        loadPlaylist(url);
-      }
-    });
+    document.getElementById('loadPlaylistBtn').addEventListener('click', loadPlaylist);
+    document.getElementById('searchInput').addEventListener('input', filterChannels);
+    document.getElementById('groupSelect').addEventListener('change', filterChannels);
+
+    // Optionally load default playlist on page load:
+    window.addEventListener('load', loadPlaylist);
   </script>
 </body>
 </html>

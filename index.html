@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>JIO TV +</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/4.6.0/shaka-player.compiled.min.js"></script>
+  <style>
+    :root {
+      --primary: #2c3e50;
+      --accent: #3498db;
+      --bg: #f9f9f9;
+      --border-radius: 8px;
+      --text: #333;
+      --error: #e74c3c;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Segoe UI', sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    header {
+      text-align: center;
+      padding: 1rem 1.5rem;
+      background-color: var(--primary);
+      color: white;
+      width: 100%;
+    }
+
+    main {
+      max-width: 1000px;
+      width: 100%;
+      padding: 1rem;
+      box-sizing: border-box;
+    }
+
+    video {
+      width: 100%;
+      max-height: 480px;
+      background: black;
+      border-radius: var(--border-radius);
+    }
+
+    .controls {
+      margin-top: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      align-items: center;
+    }
+
+    input[type="text"] {
+      width: 100%;
+      max-width: 700px;
+      padding: 0.6rem;
+      font-size: 1rem;
+      border-radius: var(--border-radius);
+      border: 1px solid #ccc;
+    }
+
+    button {
+      background-color: var(--accent);
+      color: white;
+      border: none;
+      padding: 0.6rem 1.2rem;
+      font-size: 1rem;
+      border-radius: var(--border-radius);
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
+
+    button:hover {
+      background-color: #2980b9;
+    }
+
+    #status {
+      margin-top: 1rem;
+      color: var(--error);
+      font-weight: bold;
+      text-align: center;
+    }
+
+    #channelList {
+      margin-top: 2rem;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 1rem;
+    }
+
+    .channelBtn {
+      background: white;
+      border: 1px solid #ddd;
+      border-radius: var(--border-radius);
+      padding: 0.8rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      cursor: pointer;
+      transition: box-shadow 0.3s;
+    }
+
+    .channelBtn:hover {
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    }
+
+    .channelLogo {
+      max-width: 100px;
+      max-height: 50px;
+      object-fit: contain;
+      margin-bottom: 0.5rem;
+    }
+
+    @media (max-width: 600px) {
+      input[type="text"] {
+        font-size: 0.9rem;
+      }
+
+      button {
+        font-size: 0.9rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h2>JIO TV +</h2>
+  </header>
+
+  <main>
+    <video id="video" controls autoplay></video>
+
+    <div class="controls">
+      <input id="m3uurl" type="text" placeholder="Enter M3U playlist URL"
+             value="https://raw.githubusercontent.com/alex4528/m3u/refs/heads/main/jstar.m3u" />
+      <button id="loadPlaylistBtn">Load Playlist</button>
+    </div>
+
+    <div id="status"></div>
+
+    <div id="channelList"></div>
+  </main>
+
+  <script>
+    function parseM3UChannels(m3uText) {
+      const lines = m3uText.split(/\r?\n/).map(l => l.trim());
+      const channels = [];
+      let channel = null;
+
+      for (let line of lines) {
+        if (line.startsWith('#EXTINF:')) {
+          if (channel) channels.push(channel);
+          channel = {
+            name: '',
+            logo: '',
+            manifestUri: '',
+            clearKeyId: null,
+            clearKeyKey: null,
+            userAgent: null,
+            cookie: null,
+          };
+
+          const nameMatch = line.match(/,(.+)$/);
+          channel.name = nameMatch ? nameMatch[1].trim() : 'Unnamed Channel';
+
+          const logoMatch = line.match(/tvg-logo="([^"]+)"/);
+          if (logoMatch) channel.logo = logoMatch[1];
+
+        } else if (line.startsWith('#KODIPROP:inputstream.adaptive.license_key=')) {
+          const parts = line.split('=')[1].split(':');
+          if (parts.length === 2) {
+            channel.clearKeyId = parts[0];
+            channel.clearKeyKey = parts[1];
+          }
+        } else if (line.startsWith('#EXTVLCOPT:http-user-agent=')) {
+          channel.userAgent = line.substring('#EXTVLCOPT:http-user-agent='.length);
+        } else if (line.startsWith('#EXTHTTP:')) {
+          try {
+            channel.cookie = JSON.parse(line.substring('#EXTHTTP:'.length));
+          } catch (e) {
+            console.warn('Failed to parse EXTHTTP JSON:', e);
+          }
+        } else if (line && !line.startsWith('#')) {
+          if (channel && !channel.manifestUri) {
+            channel.manifestUri = line;
+          }
+        }
+      }
+      if (channel) channels.push(channel);
+      return channels;
+    }
+
+    let player = null;
+
+    async function playChannel(channel) {
+      const status = document.getElementById('status');
+      status.textContent = `Loading channel: ${channel.name} ...`;
+
+      if (!player) {
+        shaka.polyfill.installAll();
+        if (!shaka.Player.isBrowserSupported()) {
+          status.textContent = 'Browser not supported!';
+          return;
+        }
+        const video = document.getElementById('video');
+        player = new shaka.Player(video);
+
+        player.addEventListener('error', (event) => {
+          console.error('Player error', event.detail);
+          status.textContent = 'Playback error: ' + event.detail.message;
+        });
+      }
+
+      player.getNetworkingEngine().clearAllRequestFilters();
+      player.getNetworkingEngine().registerRequestFilter((type, request) => {
+        if (type === shaka.net.NetworkingEngine.RequestType.MANIFEST ||
+            type === shaka.net.NetworkingEngine.RequestType.SEGMENT) {
+
+          if (channel.cookie && channel.cookie.cookie) {
+            if (!request.uris.some(u => u.includes(channel.cookie.cookie))) {
+              request.uris = request.uris.map(uri =>
+                uri.includes('?') ? uri + '&' + channel.cookie.cookie : uri + '?' + channel.cookie.cookie
+              );
+            }
+          }
+
+          if (channel.userAgent) {
+            request.headers['User-Agent'] = channel.userAgent;
+          }
+
+          if (channel.cookie && channel.cookie.cookie) {
+            request.headers['Cookie'] = channel.cookie.cookie;
+          }
+        }
+      });
+
+      if (!channel.clearKeyId || !channel.clearKeyKey) {
+        status.textContent = 'Channel ClearKey info missing, cannot play.';
+        return;
+      }
+
+      player.configure({
+        drm: {
+          clearKeys: {
+            [channel.clearKeyId]: channel.clearKeyKey,
+          },
+        },
+      });
+
+      try {
+        await player.load(channel.manifestUri);
+        status.textContent = `Playing: ${channel.name}`;
+      } catch (e) {
+        console.error('Load failed', e);
+        status.textContent = 'Failed to load channel manifest: ' + e.message;
+      }
+    }
+
+    async function loadPlaylist(url) {
+      const status = document.getElementById('status');
+      const list = document.getElementById('channelList');
+      list.innerHTML = '';
+      status.textContent = 'Loading playlist...';
+
+      let text;
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status} fetching playlist`);
+        text = await res.text();
+      } catch (e) {
+        status.textContent = 'Failed to load playlist: ' + e.message;
+        return;
+      }
+
+      const channels = parseM3UChannels(text);
+
+      if (!channels.length) {
+        status.textContent = 'No channels found in playlist.';
+        return;
+      }
+
+      status.textContent = `Found ${channels.length} channel(s). Select one to play.`;
+
+      for (const ch of channels) {
+        const btn = document.createElement('div');
+        btn.className = 'channelBtn';
+        btn.title = ch.name;
+
+        if (ch.logo) {
+          const img = document.createElement('img');
+          img.className = 'channelLogo';
+          img.src = ch.logo;
+          img.alt = ch.name;
+          btn.appendChild(img);
+        }
+
+        const text = document.createElement('div');
+        text.textContent = ch.name;
+        btn.appendChild(text);
+
+        btn.addEventListener('click', () => playChannel(ch));
+
+        list.appendChild(btn);
+      }
+    }
+
+    document.getElementById('loadPlaylistBtn').addEventListener('click', () => {
+      const url = document.getElementById('m3uurl').value.trim();
+      if (url) {
+        loadPlaylist(url);
+      }
+    });
+  </script>
+</body>
+</html>

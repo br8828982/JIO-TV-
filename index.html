@@ -276,9 +276,12 @@
     }
 
     async function playChannel(channel) {
+      // Scroll to the video player
+      document.getElementById('video').scrollIntoView({ behavior: 'smooth' });
+    
       const status = document.getElementById('status');
       status.textContent = `Loading channel: ${channel.name} ...`;
-
+    
       if (!player) {
         shaka.polyfill.installAll();
         if (!shaka.Player.isBrowserSupported()) {
@@ -292,7 +295,7 @@
           status.textContent = 'Playback error: ' + event.detail.message;
         });
       }
-
+    
       player.getNetworkingEngine().clearAllRequestFilters();
       player.getNetworkingEngine().registerRequestFilter((type, request) => {
         if (type === shaka.net.NetworkingEngine.RequestType.MANIFEST ||
@@ -309,12 +312,12 @@
           }
         }
       });
-
+    
       if (!channel.clearKeyId || !channel.clearKeyKey) {
         status.textContent = 'Channel ClearKey info missing, cannot play.';
         return;
       }
-
+    
       player.configure({
         drm: {
           clearKeys: {
@@ -322,7 +325,7 @@
           }
         }
       });
-
+    
       try {
         await player.load(channel.manifestUri);
         status.textContent = 'Playing: ' + channel.name;
